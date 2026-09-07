@@ -1,0 +1,3 @@
+[submodule "block-racing-common"]
+	path = block-racing-common
+	url = https://github.com/rlawodud89/block-racing-common.git
