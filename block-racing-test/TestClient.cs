@@ -20,14 +20,30 @@ public class TestClient
         _loginTcs =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    private TaskCompletionSource<bool>
+    private readonly TaskCompletionSource<bool>
         _matchTcs =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private readonly TaskCompletionSource<bool>
+        _gameStartTcs =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    // 같은 Client에서 여러 Send가 동시에 발생하는 것을 방지
+    private readonly SemaphoreSlim _sendLock = new(1, 1);
 
     public int ClientId { get; }
 
     public bool Matched =>
         _matchTcs.Task.IsCompletedSuccessfully;
+
+    public bool GameStarted =>
+        _gameStartTcs.Task.IsCompletedSuccessfully;
+
+    public bool LoginSucceeded =>
+        _loginTcs.Task.IsCompletedSuccessfully;
+
+    // 성능 테스트 시 패킷 로그를 끌 수 있음
+    public bool EnablePacketLog { get; set; } = true;
 
     public TestClient(
         int clientId,
@@ -120,11 +136,25 @@ public class TestClient
         }
     }
 
-    public void ResetMatchState()
+    // =========================================================
+    // Game Start
+    // =========================================================
+
+    public async Task<bool> WaitForGameStartAsync(
+        TimeSpan timeout)
     {
-        _matchTcs =
-            new TaskCompletionSource<bool>(
-                TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            return await _gameStartTcs.Task.WaitAsync(timeout);
+        }
+        catch (TimeoutException)
+        {
+            Console.WriteLine(
+                $"[Client {ClientId}] " +
+                $"Game Start TIMEOUT");
+
+            return false;
+        }
     }
 
     // =========================================================
@@ -175,11 +205,15 @@ public class TestClient
                     _receiveBuffer.TryReadPacket(
                         out byte[] packet))
                 {
-                    ProcessPacket(packet);
+                    await ProcessPacketAsync(packet);
                 }
             }
         }
         catch (ObjectDisposedException)
+        {
+            // 정상적인 Disconnect 과정에서 발생 가능
+        }
+        catch (IOException)
         {
             // 정상적인 Disconnect 과정에서 발생 가능
         }
@@ -191,17 +225,17 @@ public class TestClient
         {
             Console.WriteLine(
                 $"[Client {ClientId}] " +
-                $"Receive Error: {ex.Message}");
+                $"Receive Error: {ex}");
         }
     }
 
-    private void ProcessPacket(byte[] data)
+    private async Task ProcessPacketAsync(byte[] data)
     {
         PacketReader reader =
             new(data);
 
-        ushort length =
-            reader.ReadUInt16();
+        // Length
+        _ = reader.ReadUInt16();
 
         ushort packetId =
             reader.ReadUInt16();
@@ -209,9 +243,12 @@ public class TestClient
         PacketId id =
             (PacketId)packetId;
 
-        Console.WriteLine(
-            $"[Client {ClientId}] " +
-            $"Receive Packet={id}");
+        if (EnablePacketLog)
+        {
+            Console.WriteLine(
+                $"[Client {ClientId}] " +
+                $"Receive Packet={id}");
+        }
 
         switch (id)
         {
@@ -220,19 +257,30 @@ public class TestClient
                 break;
 
             case PacketId.S_RoomReady:
-                HandleMatchFound(reader);
+                await HandleRoomReadyAsync(reader);
+                break;
+
+            case PacketId.S_StartGame:
+                HandleStartGame(reader);
                 break;
 
             case PacketId.S_GameCanceled:
-                Console.WriteLine(
-                    $"[Client {ClientId}] " +
-                    $"Match canceled");
+                HandleGameCanceled(reader);
+                break;
+
+            case PacketId.S_Heartbeat:
+                await HandleHeartbeatAsync();
                 break;
 
             default:
                 break;
         }
     }
+
+    // =========================================================
+    // Packet Handlers
+    // =========================================================
+
 
     private void HandleLogin(
         PacketReader reader)
@@ -249,7 +297,7 @@ public class TestClient
         _loginTcs.TrySetResult(true);
     }
 
-    private void HandleMatchFound(
+    private async Task HandleRoomReadyAsync(
         PacketReader reader)
     {
         S_RoomReadyPacket packet = new();
@@ -258,9 +306,53 @@ public class TestClient
 
         Console.WriteLine(
             $"[Client {ClientId}] " +
-            $"MATCH FOUND Room={packet.RoomId}");
+            $"ROOM READY Room={packet.RoomId}");
 
         _matchTcs.TrySetResult(true);
+
+        await SendReadyAsync();
+    }
+
+    private void HandleStartGame(
+        PacketReader reader)
+    {
+        S_StartGamePacket packet = new();
+
+        packet.Read(reader);
+
+        Console.WriteLine(
+            $"[Client {ClientId}] " +
+            $"GAME START " +
+            $"Countdown={packet.StartTick}s");
+
+        _gameStartTcs.TrySetResult(true);
+    }
+
+    private void HandleGameCanceled(
+        PacketReader reader)
+    {
+        Console.WriteLine(
+            $"[Client {ClientId}] " +
+            $"Match canceled");
+    }
+
+    private async Task HandleHeartbeatAsync()
+    {
+        await SendAsync(new C_HeartbeatPacket());
+    }
+
+    // =========================================================
+    // Ready
+    // =========================================================
+
+    private async Task SendReadyAsync()
+    {
+        C_ReadyPacket packet = new();
+
+        await SendAsync(packet);
+
+        Console.WriteLine(
+            $"[Client {ClientId}] Ready sent");
     }
 
     // =========================================================
@@ -284,7 +376,22 @@ public class TestClient
         byte[] data =
             writer.ToArray();
 
-        await _stream.WriteAsync(data);
+        await _sendLock.WaitAsync();
+
+        try
+        {
+            if (_stream == null)
+            {
+                throw new InvalidOperationException(
+                    "Not connected.");
+            }
+
+            await _stream.WriteAsync(data);
+        }
+        finally
+        {
+            _sendLock.Release();
+        }
     }
 
     // =========================================================
@@ -316,10 +423,13 @@ public class TestClient
         }
         catch
         {
+            // 종료 과정에서 발생하는 예외 무시
         }
-
-        _stream = null;
-        _client = null;
-        _receiveTask = null;
+        finally
+        {
+            _stream = null;
+            _client = null;
+            _receiveTask = null;
+        }
     }
 }
