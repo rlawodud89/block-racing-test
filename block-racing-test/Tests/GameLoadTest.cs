@@ -22,6 +22,9 @@ public static class GameLoadTest
 
         Console.WriteLine();
 
+        int totalConnectSuccess = 0;
+        int totalConnectFail = 0;
+
         int totalMatchSuccess = 0;
         int totalMatchFail = 0;
 
@@ -37,6 +40,7 @@ public static class GameLoadTest
                 $"{TestConfig.BatchTestCount} ==========");
 
             List<TestClient> clients = [];
+            List<TestClient> connectedClients = [];
 
             try
             {
@@ -67,17 +71,64 @@ public static class GameLoadTest
                 Console.WriteLine(
                     "[TEST] Connecting clients...");
 
-                Task[] connectTasks =
+                Task<bool>[] connectTasks =
                     clients
                         .Select(
-                            client =>
-                                client.ConnectAndLoginAsync())
+                            async client =>
+                            {
+                                try
+                                {
+                                    await client.ConnectAndLoginAsync();
+
+                                    return true;
+                                }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine(
+                                        $"[Client {client.ClientId}] " +
+                                        $"Connect failed: {ex.Message}");
+
+                                    return false;
+                                }
+                            })
                         .ToArray();
 
-                await Task.WhenAll(connectTasks);
+                bool[] connectResults =
+                    await Task.WhenAll(connectTasks);
 
+                for (int i = 0;
+                     i < clients.Count;
+                     i++)
+                {
+                    if (connectResults[i])
+                        connectedClients.Add(clients[i]);
+                }
+
+                int connectSuccess =
+                    connectedClients.Count;
+
+                int connectFail =
+                    clients.Count - connectSuccess;
+
+                totalConnectSuccess += connectSuccess;
+                totalConnectFail += connectFail;
+
+                Console.WriteLine();
                 Console.WriteLine(
-                    "[TEST] All clients connected.");
+                    $"[CONNECT RESULT] " +
+                    $"Success={connectSuccess}, " +
+                    $"Fail={connectFail}");
+
+                // 연결된 클라이언트가 2명 미만이면
+                // 매칭 테스트 자체를 수행할 수 없음
+                if (connectedClients.Count < 2)
+                {
+                    Console.WriteLine(
+                        "[TEST] Not enough connected clients " +
+                        "for matchmaking.");
+
+                    continue;
+                }
 
                 // =================================================
                 // 3. 동시 Match Request
@@ -87,7 +138,7 @@ public static class GameLoadTest
                     "[TEST] Preparing simultaneous MatchRequest...");
 
                 await SendMatchRequestsSimultaneouslyAsync(
-                    clients);
+                    connectedClients);
 
                 Console.WriteLine(
                     "[TEST] All MatchRequests sent.");
@@ -100,7 +151,7 @@ public static class GameLoadTest
                     "[TEST] Waiting for matchmaking...");
 
                 Task<bool>[] matchTasks =
-                    clients
+                    connectedClients
                         .Select(
                             client =>
                                 client.WaitForMatchAsync(
@@ -127,7 +178,7 @@ public static class GameLoadTest
                     $"Fail={matchFail}");
 
                 PrintFailedClients(
-                    clients,
+                    connectedClients,
                     matchResults,
                     "MATCH");
 
@@ -139,8 +190,16 @@ public static class GameLoadTest
                 Console.WriteLine(
                     "[TEST] Waiting for game start...");
 
+                List<TestClient> matchedClients = [];
+
+                for (int i = 0; i < connectedClients.Count; i++)
+                {
+                    if (matchResults[i])
+                        matchedClients.Add(connectedClients[i]);
+                }
+
                 Task<bool>[] gameStartTasks =
-                    clients
+                    matchedClients
                         .Select(
                             client =>
                                 client.WaitForGameStartAsync(
@@ -155,8 +214,7 @@ public static class GameLoadTest
                     gameStartResults.Count(result => result);
 
                 int gameStartFail =
-                    gameStartResults.Length -
-                    gameStartSuccess;
+                    gameStartResults.Length - gameStartSuccess;
 
                 totalGameStartSuccess += gameStartSuccess;
                 totalGameStartFail += gameStartFail;
@@ -167,7 +225,7 @@ public static class GameLoadTest
                     $"Fail={gameStartFail}");
 
                 PrintFailedClients(
-                    clients,
+                    matchedClients,
                     gameStartResults,
                     "GAME START");
 
@@ -175,12 +233,13 @@ public static class GameLoadTest
                 // 6. 게임 유지
                 // =================================================
 
-                if (gameStartSuccess == clients.Count)
+                if (matchedClients.Count > 0 &&
+                        gameStartSuccess == matchedClients.Count)
                 {
                     Console.WriteLine();
                     Console.WriteLine(
                         $"[TEST] Keeping " +
-                        $"{clients.Count} clients connected " +
+                        $"{connectedClients.Count} clients connected " +
                         $"for " +
                         $"{TestConfig.GameKeepDurationSeconds}s...");
 
@@ -241,6 +300,18 @@ public static class GameLoadTest
         Console.WriteLine("=================================");
 
         Console.WriteLine(
+            $"Connect Success : {totalConnectSuccess}");
+
+        Console.WriteLine(
+            $"Connect Fail    : {totalConnectFail}");
+
+        Console.WriteLine(
+            $"Connect Total   : " +
+            $"{totalConnectSuccess + totalConnectFail}");
+
+        Console.WriteLine();
+
+        Console.WriteLine(
             $"Match Success : {totalMatchSuccess}");
 
         Console.WriteLine(
@@ -284,15 +355,12 @@ public static class GameLoadTest
                 .Select(
                     async client =>
                     {
-                        // 모든 Client가 여기서 대기
                         await startSignal.Task;
 
-                        // 동시에 시작
                         await client.RequestMatchAsync();
                     })
                 .ToArray();
 
-        // 모든 Task가 대기 상태가 되도록 한 번 양보
         await Task.Yield();
 
         Console.WriteLine(
