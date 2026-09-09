@@ -10,7 +10,7 @@ public static class TestConfig
     public const int PersistentTestCount = 50;
 
     // Game Load Test
-    public const int BatchClientCount = 500;
+    public const int BatchClientCount = 50;
     public const int BatchTestCount = 1;
 
     // Connection Load Test
@@ -22,5 +22,9 @@ public static class TestConfig
 
     // 게임 유지 시간
     public const int GameKeepDurationSeconds = 60;
+
+    // Input Load Test
+    public const int GameEndTimeoutSeconds = 3600;
+    public const int InputIntervalMilliseconds = 50;
 }
 

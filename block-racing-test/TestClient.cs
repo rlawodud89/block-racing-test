@@ -1,6 +1,7 @@
 ﻿using System.Net.Sockets;
 using block_racing_common.Network;
 using block_racing_common.Network.Packets;
+using block_racing_common.Game.Enums;
 
 namespace block_racing_test;
 
@@ -27,6 +28,13 @@ public class TestClient
     private readonly TaskCompletionSource<bool>
         _gameStartTcs =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private readonly TaskCompletionSource<bool>
+    _gameEndTcs =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public bool GameEnded =>
+        _gameEndTcs.Task.IsCompletedSuccessfully;
 
     // 같은 Client에서 여러 Send가 동시에 발생하는 것을 방지
     private readonly SemaphoreSlim _sendLock = new(1, 1);
@@ -158,6 +166,42 @@ public class TestClient
     }
 
     // =========================================================
+    // Game End
+    // =========================================================
+
+    public async Task<bool> WaitForGameEndAsync(
+    TimeSpan timeout)
+    {
+        try
+        {
+            return await _gameEndTcs.Task.WaitAsync(timeout);
+        }
+        catch (TimeoutException)
+        {
+            Console.WriteLine(
+                $"[Client {ClientId}] " +
+                $"Game End TIMEOUT");
+
+            return false;
+        }
+    }
+
+    // =========================================================
+    // Input
+    // =========================================================
+
+    public async Task SendInputAsync(
+        InputType inputType)
+    {
+        C_InputPacket packet = new()
+        {
+            InputType = inputType
+        };
+
+        await SendAsync(packet);
+    }
+
+    // =========================================================
     // Connection 유지
     // =========================================================
 
@@ -272,6 +316,10 @@ public class TestClient
                 await HandleHeartbeatAsync();
                 break;
 
+            case PacketId.S_GameEnd:
+                HandleGameEnd(reader);
+                break;
+
             default:
                 break;
         }
@@ -339,6 +387,20 @@ public class TestClient
     private async Task HandleHeartbeatAsync()
     {
         await SendAsync(new C_HeartbeatPacket());
+    }
+
+    private void HandleGameEnd(
+    PacketReader reader)
+    {
+        S_GameEndPacket packet = new();
+
+        packet.Read(reader);
+
+        Console.WriteLine(
+            $"[Client {ClientId}] " +
+            $"GAME END Result={packet.Result}");
+
+        _gameEndTcs.TrySetResult(true);
     }
 
     // =========================================================
