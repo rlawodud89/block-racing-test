@@ -11,6 +11,7 @@ public class Program
 
         Console.WriteLine("1. Matchmaking Test");
         Console.WriteLine("2. Game Load Test");
+        Console.WriteLine("3. Connection Load Test");
         Console.WriteLine();
 
         Console.Write("Select Test: ");
@@ -25,6 +26,10 @@ public class Program
 
             case "2":
                 await GameLoadTest.RunAsync();
+                break;
+
+            case "3":
+                await ConnectionLoadTest.RunAsync();
                 break;
 
             default:

@@ -10,8 +10,12 @@ public static class TestConfig
     public const int PersistentTestCount = 50;
 
     // Game Load Test
-    public const int BatchClientCount = 50;
+    public const int BatchClientCount = 500;
     public const int BatchTestCount = 1;
+
+    // Connection Load Test
+    public const int ConnectionBatchSize = 50;
+    public const int ConnectionBatchDelayMs = 500;
 
     // Matchmaking timeout
     public const int MatchTimeoutSeconds = 5;
