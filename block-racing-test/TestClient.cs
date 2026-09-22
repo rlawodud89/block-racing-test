@@ -100,10 +100,7 @@ public class TestClient
 
     private async Task SendLoginAsync()
     {
-        C_LoginPacket packet = new()
-        {
-            Nickname = $"TestPlayer_{ClientId}"
-        };
+        C_LoginPacket packet = new();
 
         await SendAsync(packet);
 
