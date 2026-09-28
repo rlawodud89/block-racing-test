@@ -235,6 +235,6 @@ Game Play
 
 ## Related Repositories
 
-* [Block Racing] — Block Racing 전체 프로젝트
-* [Block Racing Server] — 게임 서버
-* [Block Racing Common] — 서버와 클라이언트가 공유하는 공통 코드
+* [Block Racing](https://github.com/rlawodud89/block-racing) — Block Racing 전체 프로젝트
+* [Block Racing Server](https://github.com/rlawodud89/block-racing-server) — 게임 서버
+* [Block Racing Common](https://github.com/rlawodud89/block-racing-common) — 서버와 클라이언트가 공유하는 공통 코드
